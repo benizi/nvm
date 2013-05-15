@@ -1,0 +1,173 @@
+#!/bin/sh
+# {{{1 settings
+NVM_ROOT=${NVM_ROOT:-/opt/nvm}
+NVM_NODES=${NVM_NODES:-$NVM_ROOT/versions}
+NVM_GIT=${NVM_GIT:-$NVM_ROOT/git}
+NVM_GIT_SOURCE=${NVM_GIT_SOURCE:-"https://github.com/joyent/node"}
+
+# {{{1 utility functions
+warn() {
+  tput setf 4
+  printf '%s\n' "$*"
+  tput sgr0
+}
+
+die() {
+  warn "$@"
+  exit 1
+}
+
+require() {
+  local cmd
+  for cmd ; do
+    hash "$cmd" 2> /dev/null && return 0
+    die "Missing requirement: $cmd"
+  done
+}
+
+checkcd() {
+  cd "$@" || die "Couldn't cd to $*"
+}
+
+# {{{1 non-user commands
+setup_nvm() {
+  require git
+  mkdir -p "$NVM_ROOT"
+  mkdir -p "$NVM_NODES"
+  if ! test -d "$NVM_GIT" ; then
+    printf '[initial setup] Cloning %s to %s\n' "$NVM_GIT_SOURCE" "$NVM_GIT"
+    git clone "$NVM_GIT_SOURCE" "$NVM_GIT"
+  fi
+  if ! test -d "$NVM_GIT" ; then
+    die "Failed to clone $NVM_GIT_SOURCE to $NVM_GIT"
+  fi
+}
+
+clean_path() {
+  local dir newpath orig=$IFS
+  newpath=
+  IFS=:
+  for dir in $PATH ; do
+    if test "$dir" != "$NVM_ROOT" && test "${dir#$NVM_ROOT/}" = "$dir" ; then
+      newpath="$newpath:$dir"
+    fi
+  done
+  IFS=$orig
+  PATH=${newpath#:}
+}
+
+version_sort() {
+  LC_ALL=C awk '{
+  nparts = split($0, a, "[^[:digit:]]+")
+  for (i=1;i<=nparts;i++)
+    if (length(a[i]))
+      printf("%04d\t", a[i])
+  print $0 }' | sort | awk '{ print $(NF) }'
+}
+
+require_version() {
+  setup_nvm
+  local usage=$1
+  shift
+  version=$1
+  expr "$version" : '[0-9]' > /dev/null && version=v$version
+  test -z "$version" && die "Usage: nvm $usage"
+  shift
+  clean_path
+  PATH="$(version_dir $version bin):$PATH"
+  NVM_VERSION=$version
+}
+
+require_version_exists() {
+  require_version "$@"
+  local node=$(version_dir $version bin node)
+  if ! test -x "$node" ; then
+    nvm_versions
+    die "Node version $version not installed"
+  fi
+}
+
+version_dir() {
+  printf '%s' "$NVM_NODES"
+  printf '/%s' "$@"
+}
+
+# {{{1 user-callable commands
+nvm_available() {
+  setup_nvm
+  checkcd "$NVM_GIT"
+  git tag | grep -F "$1" | version_sort
+}
+
+nvm_bin() {
+  require_version_exists 'bin version' "$@"
+  version_dir $version bin
+}
+
+nvm_default() {
+  local default_file="$HOME/.node-version"
+  to_use=$(if test -f "$default_file" ; then
+    cat "$default_file"
+  else
+    nvm_versions | awk 'END { print }'
+  fi)
+  test -z "$to_use" && die 'No installed versions'
+  nvm_env "$to_use"
+}
+
+nvm_env() {
+  require_version_exists 'env version' "$@"
+  printf '%s=%s\n' NVM_VERSION "$NVM_VERSION" PATH "$PATH"
+}
+
+nvm_install() {
+  setup_nvm
+  require make
+  require_version 'install version' "$@"
+  local prefix=$(version_dir $version)
+  if test -d "$prefix" ; then
+    die "Version $version already installed in $prefix"
+  fi
+  checkcd "$NVM_GIT"
+  rev=$(git rev-parse "refs/tags/$version" 2> /dev/null)
+  if test 40 != "$(expr "$rev" : '[0-9a-f]*')" ; then
+    warn "Version string ($version) did not match a tag in the node repository"
+    git tag | grep -F "$version" | version_sort
+    return 1
+  fi
+  set -e
+  git clean -xdf
+  git checkout "$version"
+  ./configure --prefix="$prefix"
+  make install
+}
+
+nvm_use() {
+  require_version_exists 'use version [cmd [args]]' "$@"
+  shift
+  test $# -gt 0 || set -- node
+  exec env PATH="$PATH" "$@"
+}
+
+nvm_versions() {
+  local dir
+  if test -d "$NVM_NODES" ; then
+    checkcd "$NVM_NODES"
+    set -- *
+    for dir ; do
+      if test -d "$dir" ; then
+        printf '%s\n' "$dir"
+      fi
+    done | version_sort
+  fi
+}
+
+# {{{1 main
+nvm() {
+  test $# -eq 0 && set -- versions
+  local cmd=$1
+  shift
+  nvm_$cmd "$@"
+}
+
+nvm "$@"
