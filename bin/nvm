@@ -75,6 +75,7 @@ require_version() {
   shift
   clean_path
   PATH="$(version_dir $version bin):$PATH"
+  NODE_PATH="$(version_dir $version lib node_modules)"
   NVM_VERSION=$version
 }
 
@@ -117,7 +118,7 @@ nvm_default() {
 
 nvm_env() {
   require_version_exists 'env version' "$@"
-  printf '%s=%s\n' NVM_VERSION "$NVM_VERSION" PATH "$PATH"
+  printf '%s=%s\n' NVM_VERSION "$NVM_VERSION" PATH "$PATH" NODE_PATH "$NODE_PATH"
 }
 
 nvm_install() {
@@ -146,7 +147,7 @@ nvm_use() {
   require_version_exists 'use version [cmd [args]]' "$@"
   shift
   test $# -gt 0 || set -- node
-  exec env PATH="$PATH" "$@"
+  exec env PATH="$PATH" NODE_PATH="$NODE_PATH" "$@"
 }
 
 nvm_versions() {
